@@ -1,6 +1,9 @@
 #include <Bounce2.h>
 #include <Adafruit_NeoPixel.h>
 
+#include <I2Cdev.h>
+#include <MPU6050_6Axis_MotionApps20.h>
+
 #include <Wire.h>
 #include <Arduino.h>
 #include <SoftwareSerial.h>
@@ -45,6 +48,17 @@ uint32_t Color = 65280;   // 預設劍刃顏色為綠色(十進制)
 Adafruit_NeoPixel LEDStrip(NUM_LEDS, BLADELED_PIN, NEO_RGB + NEO_KHZ800);
 
 /***************************************************************************************************
+ * MPU6050 variables
+ */
+uint8_t mpuStatus; // holds actual interrupt status byte from MPU
+uint8_t lastgx, lastgy, lastgz;
+bool isSwing = 0;            // 0 is not swing; 1 is swing;
+bool isPlaySwing;            // swing 狀態是否執行
+unsigned long lastSwing;     // swing 前次時間
+uint8_t swingDuration = 500; // swing 播放至少的時間
+MPU6050 mpu;
+
+/***************************************************************************************************
  * DFPlayer Mini variables
  */
 uint8_t track = 3;                               // 1.開劍刃、2.關劍刃、3.待機電流、4.揮舞
@@ -69,6 +83,16 @@ void setup()
     // DFPlayer Mini 撥放器初始音量
     myDFPlayer.volume(playVolume);
 
+    mpu.initialize();
+
+    mpu.setIntMotionEnabled(true); // INT_ENABLE register enable interrupt source  motion detection
+    mpu.setIntZeroMotionEnabled(true);
+    mpu.setIntFIFOBufferOverflowEnabled(false);
+    mpu.setIntI2CMasterEnabled(false);
+    mpu.setIntDataReadyEnabled(false);
+    mpu.setMotionDetectionThreshold(10); // 1mg/LSB
+    mpu.setMotionDetectionDuration(2);   // number of consecutive samples above threshold to trigger int
+
     pinMode(BUTTON_PIN, INPUT_PULLUP);
     debouncer.attach(BUTTON_PIN);
     debouncer.interval(30); // interval in milliseconds
@@ -78,11 +102,59 @@ void setup()
     LEDStrip.begin();
     LEDStrip.setBrightness(255);
     LEDStrip.show();
+
+    Serial.println("Di-One Saber is Done！");
 }
 
 void loop()
 {
     DFPlayerState = digitalRead(BUSY_PIN);
+
+    // 開啟刀鋒，撥放 Swing 音效
+    if (bladeState == 1)
+    {
+        int16_t gx, gy, gz;
+        mpu.getRotation(&gx, &gy, &gz);
+        gx = abs(map(gx, -32768, 32768, -10, 10));
+        gy = abs(map(gy, -32768, 32768, -10, 10));
+        gz = abs(map(gz, -32768, 32768, -10, 10));
+
+        // Serial.print("gx:");
+        // Serial.print(gx);
+        // Serial.print("gy:");
+        // Serial.print(gy);
+        // Serial.print("gz:");
+        // Serial.println(gz);
+
+        if (!isSwing && !isPlaySwing)
+        {
+            if (((gx > 9) && (lastgx < gx)) || ((gy > 9) && (lastgy < gy)) || ((gz > 9) && (lastgz < gz)))
+            {
+                isSwing = 1;
+            }
+        }
+        lastgx = gx;
+        lastgy = gy;
+        lastgz = gz;
+
+        if (isSwing)
+        {
+            // 揮舞效果非執行中
+            if (!isPlaySwing)
+            {
+                playTrack(4);
+                isPlaySwing = 1;
+                lastSwing = millis();
+            }
+            else
+            {
+                if (millis() - lastSwing > swingDuration)
+                {
+                    initSwing();
+                }
+            }
+        }
+    }
 
     // 更新消除按鈕彈跳物件
     bool changed = debouncer.update();
@@ -170,6 +242,13 @@ void loop()
     {
         playTrack(3);
     }
+}
+
+// 初始化 Swing 狀態
+void initSwing()
+{
+    isSwing = 0;
+    isPlaySwing = 0;
 }
 
 void playTrack(int trackIndex)
