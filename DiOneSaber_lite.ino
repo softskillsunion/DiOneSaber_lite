@@ -1,4 +1,12 @@
+
+
 #include <Bounce2.h>
+#include <Adafruit_NeoPixel.h>
+
+/***************↓↓↓↓↓ 更改設定值 ↓↓↓↓↓***************/
+// 劍刃燈珠數量
+#define NUM_LEDS 80 // 劍長1000mm(連接8P燈條10支)
+/***************↑↑↑↑↑ 更改設定值 ↑↑↑↑↑***************/
 
 /***************************************************************************************************
  * Arduino 針腳定義
@@ -23,6 +31,16 @@ uint8_t btnState;             // 1 為按鈕按住； 2 為按鈕放開； 0 為
 uint8_t btnClickCounter;      // 記錄按下次數
 Bounce debouncer = Bounce();  // Instantiate a Bounce object.
 
+/***************************************************************************************************
+ * LEDStrip variables
+ */
+uint8_t bladeState;       // 0 為關閉； 1 為開啟
+uint8_t BladeColors = 5;  // 設定刀鋒可變顏色數量，對應 changeColor 函式變更設定，0紅、1綠、2藍、3黃、4紫
+uint8_t DefaultColor = 1; // 設定刀鋒開機預設顏色，利用按鈕配合 BladeColors 0~4 切換 5 種顏色，9 則代表藍牙設定的顏色
+uint8_t DFPlayerState;    // 紀錄 DFPlayer Mini 播放狀態，1為待機，0表示播放中
+uint32_t Color = 65280;   // 預設劍刃顏色為綠色(十進制)
+Adafruit_NeoPixel LEDStrip(NUM_LEDS, BLADELED_PIN, NEO_RGB + NEO_KHZ800);
+
 void setup()
 {
     Serial.begin(115200);
@@ -30,6 +48,12 @@ void setup()
     pinMode(BUTTON_PIN, INPUT_PULLUP);
     debouncer.attach(BUTTON_PIN);
     debouncer.interval(30); // interval in milliseconds
+
+    pinMode(BLADELED_PIN, OUTPUT);
+
+    LEDStrip.begin();
+    LEDStrip.setBrightness(255);
+    LEDStrip.show();
 }
 
 void loop()
@@ -81,15 +105,32 @@ void loop()
         // 進入長按前的輕點次數為 0，且按住超過 0.5 秒
         if (btnClickCounter == 0 && butPressDuration >= 500)
         {
-            Serial.println("Long press over 0.5 seconds");
-            ButtonInitialize(); // 按鈕狀態初始化，跳出判斷式
+            if (bladeState == 1)
+            { // 狀態為開啟時，則關閉刀鋒
+                //Serial.println("Turn off the ledstrip.");
+                ButtonInitialize(); // 按鈕狀態初始化，跳出判斷式
+                bladeState = 0;
+                delay(100);
+                BladeOFF();
+            }
+            else
+            {
+                ButtonInitialize(); // 按鈕狀態初始化，跳出判斷式
+                bladeState = 1;
+                BladeON();
+            }
         }
     }
 
-    // 按鈕放開後，且連點兩下，切換顏色
-    if (btnState == 2 && btnClickCounter == 2)
+    // 按鈕放開後，刀鋒為開啟狀態，且連點兩下，切換顏色
+    if (btnState == 2 && bladeState == 1 && btnClickCounter == 2)
     {
-        Serial.println("Double click");
+        DefaultColor = DefaultColor + 1;
+        if (DefaultColor >= BladeColors)
+        {
+            DefaultColor = 0;
+        }
+        setStrip(DefaultColor);
         ButtonInitialize(); // 按鈕狀態初始化，跳出判斷式
     }
 }
@@ -99,4 +140,60 @@ void ButtonInitialize()
 {
     btnState = 0;
     btnClickCounter = 0;
+}
+
+void BladeON()
+{
+    for (int i = 0; i < NUM_LEDS; i++)
+    {
+        setPixel(i, DefaultColor);
+        LEDStrip.show();
+        delay(15);
+    }
+    delay(100);
+}
+
+void BladeOFF()
+{
+    for (int i = NUM_LEDS - 1; i > -1; i--)
+    {
+        LEDStrip.setPixelColor(i, 0);
+        delay(15);
+        LEDStrip.show();
+    }
+}
+
+void setPixel(uint8_t Pixel, uint8_t ColorSerialNum)
+{
+    switch (ColorSerialNum)
+    {
+    case 0:
+        LEDStrip.setPixelColor(Pixel, LEDStrip.Color(255, 0, 0));
+        break;
+    case 1:
+        LEDStrip.setPixelColor(Pixel, LEDStrip.Color(0, 255, 0));
+        break;
+    case 2:
+        LEDStrip.setPixelColor(Pixel, LEDStrip.Color(0, 0, 255));
+        break;
+    case 3:
+        LEDStrip.setPixelColor(Pixel, LEDStrip.Color(255, 255, 0));
+        break;
+    case 4:
+        LEDStrip.setPixelColor(Pixel, LEDStrip.Color(255, 0, 255));
+        break;
+    default:
+        LEDStrip.setPixelColor(Pixel, Color);
+        break;
+    }
+}
+
+// 變色特效中，設定燈條整串顏色變色時使用
+void setStrip(uint8_t ColorSerialNum)
+{
+    for (uint8_t i = 0; i < NUM_LEDS; i++)
+    {
+        setPixel(i, ColorSerialNum);
+    }
+    LEDStrip.show();
 }
