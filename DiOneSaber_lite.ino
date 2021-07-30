@@ -1,7 +1,10 @@
-
-
 #include <Bounce2.h>
 #include <Adafruit_NeoPixel.h>
+
+#include <Wire.h>
+#include <Arduino.h>
+#include <SoftwareSerial.h>
+#include <DFRobotDFPlayerMini.h>
 
 /***************↓↓↓↓↓ 更改設定值 ↓↓↓↓↓***************/
 // 劍刃燈珠數量
@@ -41,9 +44,30 @@ uint8_t DFPlayerState;    // 紀錄 DFPlayer Mini 播放狀態，1為待機，0�
 uint32_t Color = 65280;   // 預設劍刃顏色為綠色(十進制)
 Adafruit_NeoPixel LEDStrip(NUM_LEDS, BLADELED_PIN, NEO_RGB + NEO_KHZ800);
 
+/***************************************************************************************************
+ * DFPlayer Mini variables
+ */
+uint8_t track = 3;                               // 1.開劍刃、2.關劍刃、3.待機電流、4.揮舞
+SoftwareSerial mySoftwareSerial(RX_PIN, TX_PIN); // Set ESP8266 RX and TX pin.
+uint8_t playVolume = 28;                         // 播放音量
+DFRobotDFPlayerMini myDFPlayer;                  // Instantiate the DFPlayer object.
+
 void setup()
 {
     Serial.begin(115200);
+
+    pinMode(BUSY_PIN, INPUT);
+
+    Wire.begin(SDA, SCL);
+    mySoftwareSerial.begin(9600);
+
+    if (!myDFPlayer.begin(mySoftwareSerial))
+    { //Use softwareSerial to communicate with mp3.
+        while (true)
+            ;
+    }
+    // DFPlayer Mini 撥放器初始音量
+    myDFPlayer.volume(playVolume);
 
     pinMode(BUTTON_PIN, INPUT_PULLUP);
     debouncer.attach(BUTTON_PIN);
@@ -58,6 +82,8 @@ void setup()
 
 void loop()
 {
+    DFPlayerState = digitalRead(BUSY_PIN);
+
     // 更新消除按鈕彈跳物件
     bool changed = debouncer.update();
 
@@ -105,18 +131,23 @@ void loop()
         // 進入長按前的輕點次數為 0，且按住超過 0.5 秒
         if (btnClickCounter == 0 && butPressDuration >= 500)
         {
+
             if (bladeState == 1)
             { // 狀態為開啟時，則關閉刀鋒
                 //Serial.println("Turn off the ledstrip.");
                 ButtonInitialize(); // 按鈕狀態初始化，跳出判斷式
                 bladeState = 0;
                 delay(100);
+                myDFPlayer.playMp3Folder(2);
+                delay(100);
                 BladeOFF();
+                // delay(500);
             }
             else
             {
                 ButtonInitialize(); // 按鈕狀態初始化，跳出判斷式
                 bladeState = 1;
+                myDFPlayer.playMp3Folder(1);
                 BladeON();
             }
         }
@@ -133,6 +164,18 @@ void loop()
         setStrip(DefaultColor);
         ButtonInitialize(); // 按鈕狀態初始化，跳出判斷式
     }
+
+    // 刀鋒狀態為開啟、撥放器為待機，則撥放 Hum 音效
+    if (bladeState == 1 && DFPlayerState == 1)
+    {
+        playTrack(3);
+    }
+}
+
+void playTrack(int trackIndex)
+{
+    myDFPlayer.playMp3Folder(trackIndex);
+    delay(200);
 }
 
 // 按鈕狀態初始化，跳出判斷式。每次判斷點擊成功，執行對應效果後都需初始化
