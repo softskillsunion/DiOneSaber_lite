@@ -1,4 +1,11 @@
+#include <ESP8266WiFi.h>
+#include <ESP8266WiFiMulti.h>
+#include <ESP8266mDNS.h>
+#include <ESP8266WebServer.h>
+#include <WebSocketsServer.h>
+
 #include <Bounce2.h>
+#include <Timer.h>
 #include <Adafruit_NeoPixel.h>
 
 #include <I2Cdev.h>
@@ -8,6 +15,8 @@
 #include <Arduino.h>
 #include <SoftwareSerial.h>
 #include <DFRobotDFPlayerMini.h>
+
+#include <ArduinoJson.h> // https://github.com/bblanchon/ArduinoJson
 
 /***************↓↓↓↓↓ 更改設定值 ↓↓↓↓↓***************/
 // 劍刃燈珠數量
@@ -27,6 +36,10 @@
 #define BUTTON_PIN 0     // D3 按鈕訊號輸入 PIN，GPIO0 及 GPIO2 有 PULLUP 上拉電阻
 #define SCL 5            // D1，MPU6050 SCL
 #define SDA 4            // D2，MPU6050 SDA
+/************************************/
+
+String json;
+char hostString[16] = {0};
 
 /***************************************************************************************************
  * Button variables
@@ -66,6 +79,384 @@ SoftwareSerial mySoftwareSerial(RX_PIN, TX_PIN); // Set ESP8266 RX and TX pin.
 uint8_t playVolume = 28;                         // 播放音量
 DFRobotDFPlayerMini myDFPlayer;                  // Instantiate the DFPlayer object.
 
+ESP8266WiFiMulti wifiMulti;                        // 宣告 Wi-Fi 連線物件
+ESP8266WebServer server;                           // 宣告 WEB Server 物件
+WebSocketsServer webSocket = WebSocketsServer(81); // WEB Server 加入 webSocket 於 port 81
+
+// PROGMEM 是將大量資料從 SRAM 搬到 Flash，當要使用時再從 Flash 搬回來。
+char webpage[] PROGMEM = R"=====(
+<html>
+
+<head>
+    <!-- 正常顯示繁體中文 -->
+    <meta charset='utf-8'>
+    <!-- 引用 javascript 函式庫 -->
+    <script src='https://cdnjs.cloudflare.com/ajax/libs/jscolor/2.3.3/jscolor.min.js'></script>
+    <style type="text/css">
+        /* https://codepen.io/sdthornton/pen/wBZdXq */
+        body {
+            background: #5a5a5a;
+            text-align: center;
+            align-items: center;
+            flex-direction: column;
+            font-family: sans-serif;
+        }
+
+        .card {
+            background: rgb(56, 56, 56);
+            border-radius: 2px;
+            display: inline-block;
+            width: 180px;
+            height: 120px;
+            margin: 5px;
+            position: relative;
+            color: floralwhite;
+        }
+
+        .card-1 {
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 1px 2px rgba(0, 0, 0, 0.24);
+            transition: all 0.3s cubic-bezier(.25, .8, .25, 1);
+        }
+
+        .card-1:hover {
+            box-shadow: 0 14px 28px rgba(0, 0, 0, 0.25), 0 10px 10px rgba(0, 0, 0, 0.22);
+        }
+
+        .title {
+            background: #535353;
+            border-radius: 5px;
+            display: inline-block;
+            width: 100%;
+            margin: 10px;
+            /* overflow: auto; */
+            position: relative;
+            color: floralwhite;
+
+        }
+
+        .title1 {
+            font-size: 35px;
+            position: relative;
+            float: left;
+        }
+
+        .title2 {
+            font-size: 25px;
+            position: relative;
+            float: right;
+            top: 15px;
+            right: 5px;
+        }
+
+        .subtitle {
+            display: inline-block;
+            width: 100%;
+            position: relative;
+            color: rgb(190, 190, 190);
+            font-size: 18px;
+        }
+
+        .subtitle1 {
+            position: relative;
+            float: left;
+        }
+
+        .subtitle2 {
+            position: relative;
+            float: right;
+            right: 5px;
+        }
+
+        h1 {
+            margin-top: 0.25em;
+            margin-bottom: 0;
+            position: relative;
+        }
+
+        /* Start Select */
+        /* https://codepen.io/raubaca/details/VejpQP */
+
+        /* Reset Select */
+        select {
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            -ms-appearance: none;
+            appearance: none;
+            outline: 0;
+            box-shadow: none;
+            border: 0 !important;
+            background: gray;
+            background-image: none;
+        }
+
+        /* Remove IE arrow */
+        select::-ms-expand {
+            display: none;
+        }
+
+        /* Custom Select */
+        .select {
+            position: relative;
+            display: flex;
+            width: 130px;
+            height: 2.3em;
+            line-height: 3;
+            background: #2c3e50;
+            overflow: hidden;
+            border-radius: .25em;
+            top: 10px;
+            left: 25px;
+        }
+
+        select {
+            flex: 1;
+            padding: 0 .5em;
+            color: #fff;
+            cursor: pointer;
+        }
+
+        /* Arrow */
+        .select::after {
+            content: '\25BC';
+            position: absolute;
+            top: 0;
+            right: 0;
+            padding: 0 0.5em;
+            background: rgb(82, 82, 82);
+            cursor: pointer;
+            pointer-events: none;
+            -webkit-transition: .25s all ease;
+            -o-transition: .25s all ease;
+            transition: .25s all ease;
+        }
+
+        /* Transition */
+        .select:hover::after {
+            color: #f39c12;
+        }
+
+        /* End Select */
+
+        /* Start Checkbox */
+        /* https://codepen.io/mburnette/pen/LxNxNg */
+        input[type=checkbox] {
+            height: 0;
+            width: 0;
+            visibility: hidden;
+        }
+
+        label {
+            cursor: pointer;
+            text-indent: -9999px;
+            width: 130px;
+            height: 2.5em;
+            background: grey;
+            display: block;
+            border-radius: 100px;
+            position: relative;
+            top: 5px;
+            left: 25px;
+        }
+
+        label:after {
+            content: '';
+            position: absolute;
+            top: 4px;
+            left: 5px;
+            width: 2em;
+            height: 2em;
+            background: #fff;
+            border-radius: 90px;
+            transition: 0.3s;
+        }
+
+        input:checked+label {
+            background: #bada55;
+        }
+
+        input:checked+label:after {
+            left: calc(100% - 5px);
+            transform: translateX(-100%);
+        }
+
+        label:active:after {
+            width: 130px;
+        }
+
+        /* end Checkbox */
+    </style>
+
+    <title>物聯網遠端控制光劍</title>
+</head>
+
+<body>
+    <div class="title">
+        <span class="title1">物聯網遠端控制光劍</span>
+        <a href='https://www.facebook.com/SoftSkillsUnion/' target='_blank' style='color:rgb(190, 190, 190);'><span
+                class="title2">自學力激發創造力、軟實力提升競爭力</span></a>
+    </div>
+    </p>
+    <div class="card card-1">
+        <div>
+            <h1>開關</h1>
+        </div>
+        <div>
+            <input type="checkbox" id="switch" oninput="sendCmnd(this.id, Number(this.checked))" /><label
+                for="switch">Toggle</label>
+        </div>
+    </div>
+    <div class="card card-1">
+        <div>
+            <h1>顏色</h1>
+        </div>
+        <div>
+            <input id="selectColor" class="jscolor" value="FCFCFC" onchange="sendCmnd(this.id, this.value)"
+                readonly="true" style="background-color:grey; width: 130px; height: 2.5em;position: relative;top: 10px;">
+        </div>
+    </div>
+    <hr />
+    <div class="subtitle">
+        <span id="clock" class="subtitle1">Time</span>
+        <a href='https://www.facebook.com/SoftSkillsUnion/' target='_blank' style='color:rgb(190, 190, 190);'
+            class="subtitle2">軟實力精進聯盟</a>
+    </div>
+
+    <!-- 客戶端網頁啟用 webSocket -->
+    <script>
+        var webSocket;
+        window.onload = init();
+        function addData(objData) {
+            document.getElementById("switch").checked = objData.switch;
+            // document.getElementById("selectColor").value = objData.lightColor;
+        }
+        function sendCmnd(cmnd, value) {
+            webSocket.send('{"cmnd":"' + cmnd + '","value":"' + value + '"}');
+        }
+        function init() {
+            webSocket = new WebSocket('ws://' + window.location.hostname + ':81/');
+            webSocket.onmessage = function (event) {
+                var data = JSON.parse(event.data);
+                addData(data);
+            }
+            showTime();
+        }
+        function showTime() {
+            var today = new Date();
+            var hh = today.getHours();
+            var mm = today.getMinutes();
+            var ss = today.getSeconds();
+            mm = checkTime(mm);
+            ss = checkTime(ss);
+            document.getElementById('clock').innerHTML = hh + ":" + mm + ":" + ss;
+            var timeoutId = setTimeout(showTime, 500);
+        }
+        function checkTime(i) {
+            if (i < 10) {
+                i = "0" + i;
+            }
+            return i;
+        }
+    </script>
+</body>
+
+
+</html>
+)=====";
+
+String serializeJson()
+{
+    String x = "{\"switch\":";
+    x += bladeState;
+    x += "}";
+
+    Serial.println(x);
+    return x;
+}
+
+String parseJson(String json, String field)
+{
+    // 分配空間大小至 https://arduinojson.org/v6/assistant/ 計算
+    StaticJsonDocument<100> doc;
+    deserializeJson(doc, json);
+
+    return doc[field];
+}
+
+// 取得 HEX 轉 Decimal 顏色值
+uint32_t HEXtoDEC(String hexcolor)
+{
+    // hex 16 進制轉 10 進制
+    // 開頭帶 '#' 改 &hexcolor[1]
+    // https://stackoverflow.com/questions/23576827/arduino-convert-a-string-hex-ffffff-into-3-int
+    long number;
+    if (hexcolor.substring(0, 1) == "#")
+    {
+        number = strtol(&hexcolor[1], NULL, 16);
+    }
+    else
+    {
+        number = strtol(&hexcolor[0], NULL, 16);
+    }
+    Serial.println(number);
+    return number;
+}
+
+void sendJson()
+{
+    json = serializeJson();
+    webSocket.broadcastTXT(json.c_str(), json.length());
+}
+
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
+{
+    Serial.print("WStype = ");
+    Serial.println(type);
+    Serial.printf("Data Length: %d, Payload: ", length);
+    Serial.write(payload, length);
+    Serial.println("");
+
+    String pl = "";
+    // http://www.martyncurrey.com/esp8266-and-the-arduino-ide-part-9-websockets/
+    if (type == WStype_CONNECTED) // 連線成功，回傳初始值
+    {
+        sendJson();
+    }
+    else if (type == WStype_TEXT) // 接收用戶端訊息做出回應
+    {
+        for (int i = 0; i < length; i++)
+        {
+            pl += (char)payload[i];
+        }
+
+        String cmnd = parseJson(pl, "cmnd");
+        String strValue = parseJson(pl, "value");
+        int value = strValue.toInt();
+
+        Serial.print("Cmnd: ");
+        Serial.print(cmnd);
+        Serial.print(", strValue: ");
+        Serial.print(strValue);
+        Serial.print(", value: ");
+        Serial.println(value);
+
+        if (cmnd == "switch")
+        {
+            btnPressTime = 0;
+            btnClickCounter = 0;
+            btnState = 1;
+        }
+        else if (cmnd == "selectColor")
+        {
+            Color = HEXtoDEC(strValue);
+            DefaultColor = 9;
+            if (bladeState)
+            {
+                setStrip(DefaultColor);
+            }
+        }
+    }
+}
+
 void setup()
 {
     Serial.begin(115200);
@@ -103,11 +494,52 @@ void setup()
     LEDStrip.setBrightness(255);
     LEDStrip.show();
 
+    // Wi-Fi 登入帳密
+    wifiMulti.addAP("SSU", "24209346");
+    wifiMulti.addAP("SoftSkillsUnion", "24209346");
+    wifiMulti.addAP("SoftSkillsUnion_M", "24209346");
+
+    Serial.println("Connecting ...");
+    while (wifiMulti.run() != WL_CONNECTED)
+    { // Wait for the Wi-Fi to connect: scan for Wi-Fi networks, and connect to the strongest of the networks above
+        delay(1000);
+        Serial.print(".");
+    }
+    Serial.println();
+    Serial.print("Connected to ");
+    Serial.println(WiFi.SSID()); // Tell us what network we're connected to
+    Serial.print("IP address:\t");
+    Serial.println(WiFi.localIP()); // Send the IP address of the ESP8266 to the computer
+
+    // Start the mDNS responder for http://di-one_saber_XXXXXX.local
+    sprintf(hostString, "di-one_saber_%06x", ESP.getChipId());
+    Serial.print("Hostname: ");
+    Serial.println(hostString);
+    // WiFi.hostname(hostString);
+
+    if (!MDNS.begin(hostString))
+    {
+        Serial.println("Error setting up MDNS responder!");
+    }
+    Serial.println("mDNS responder started");
+
+    MDNS.addService("http", "tcp", 80);
+
+    server.on("/", []()
+              { server.send_P(200, "text/html", webpage); });
+    server.begin();
+    webSocket.begin();
+    webSocket.onEvent(webSocketEvent);
+
     Serial.println("Di-One Saber is Done！");
 }
 
 void loop()
 {
+    MDNS.update();
+    webSocket.loop();
+    server.handleClient();
+
     DFPlayerState = digitalRead(BUSY_PIN);
 
     // 開啟刀鋒，撥放 Swing 音效
